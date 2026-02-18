@@ -1,4 +1,4 @@
-// AdminPanel.tsx (fixed)
+// AdminPanel.tsx
 import React, { useState, useRef, useEffect } from 'react';
 import { StreamMode, VideoDevice, AudioDevice, Resolution } from '../types';
 
@@ -46,7 +46,7 @@ const AdminPanel: React.FC = () => {
   // Preview player controls
   const [isPlaying, setIsPlaying] = useState(true);
   const [previewVolume, setPreviewVolume] = useState(1);
-  const [previewMuted, setPreviewMuted] = useState(true); // Preview muted by default
+  const [previewMuted, setPreviewMuted] = useState(true);
   const [showPreviewControls, setShowPreviewControls] = useState(false);
   const [isFileUploading, setIsFileUploading] = useState(false);
 
@@ -55,8 +55,8 @@ const AdminPanel: React.FC = () => {
   const streamIdRef = useRef('');
   const viewerMapRef = useRef<Map<string, number>>(new Map());
 
-  const videoRef = useRef<HTMLVideoElement>(null); // Main stream video (what viewers see)
-  const previewVideoRef = useRef<HTMLVideoElement>(null); // Local preview with controls
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const previewVideoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const bc = useRef<BroadcastChannel | null>(null);
   const peerConnections = useRef<Map<string, RTCPeerConnection>>(new Map());
@@ -64,7 +64,9 @@ const AdminPanel: React.FC = () => {
   const previewPlayPromiseRef = useRef<Promise<void> | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const stalePruneTimer = useRef<number | null>(null);
-  const fileStreamRef = useRef<MediaStream | null>(null); // Separate ref for file stream
+  const fileStreamRef = useRef<MediaStream | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = useRef<Blob[]>([]);
 
   useEffect(() => { streamTitleRef.current = streamTitle; }, [streamTitle]);
   useEffect(() => { modeRef.current = mode; }, [mode]);
@@ -100,17 +102,15 @@ const AdminPanel: React.FC = () => {
     return () => navigator.mediaDevices.removeEventListener('devicechange', getDevices);
   }, []);
 
-  // Safe play function with proper error handling
+  // Safe play function
   const safePlay = async (videoElement: HTMLVideoElement | null, promiseRef: React.MutableRefObject<Promise<void> | null>) => {
     if (!videoElement) return false;
     
     try {
-      // Wait for any existing play promise to settle
       if (promiseRef.current) {
         await promiseRef.current.catch(() => {});
       }
       
-      // Check if video is actually paused
       if (videoElement.paused) {
         promiseRef.current = videoElement.play();
         await promiseRef.current;
@@ -127,7 +127,6 @@ const AdminPanel: React.FC = () => {
     }
   };
 
-  // Safe pause function
   const safePause = (videoElement: HTMLVideoElement | null) => {
     if (!videoElement) return;
     try {
@@ -137,7 +136,6 @@ const AdminPanel: React.FC = () => {
     }
   };
 
-  // Preview controls
   const togglePreviewPlay = async () => {
     if (!previewVideoRef.current) return;
     
@@ -170,7 +168,7 @@ const AdminPanel: React.FC = () => {
     }
   };
 
-  // ── Prune stale viewers ─────────────────────────────────────────────
+  // Prune stale viewers
   const pruneStaleViewers = () => {
     const now = Date.now();
     setViewerMap(prev => {
@@ -189,7 +187,7 @@ const AdminPanel: React.FC = () => {
     });
   };
 
-  // ── BroadcastChannel ────────────────────────────────────────────────
+  // BroadcastChannel
   useEffect(() => {
     bc.current = new BroadcastChannel('secure_stream_channel');
 
@@ -259,7 +257,7 @@ const AdminPanel: React.FC = () => {
     };
   }, []);
 
-  // ── WebRTC ──────────────────────────────────────────────────────────
+  // WebRTC
   const initiateWebRTC = async (targetId: string, currentStreamId: string) => {
     if (!streamRef.current || !currentStreamId) return;
     
@@ -275,7 +273,6 @@ const AdminPanel: React.FC = () => {
       
       peerConnections.current.set(targetId, pc);
       
-      // Add all tracks from the stream
       streamRef.current.getTracks().forEach(t => {
         if (streamRef.current) {
           pc.addTrack(t, streamRef.current);
@@ -316,7 +313,6 @@ const AdminPanel: React.FC = () => {
     }
   };
 
-  // ── URL generation ──────────────────────────────────────────────────
   const generateUrl = (): string => {
     const newId = `${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 8)}`;
     setStreamUrl(buildViewerUrl(newId));
@@ -325,9 +321,7 @@ const AdminPanel: React.FC = () => {
     return newId;
   };
 
-  // ── Stream setup with selected devices and resolution ───────────────
   const setupStream = async (stream: MediaStream, newMode: StreamMode) => {
-    // Stop previous stream
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(t => {
         t.stop();
@@ -337,14 +331,12 @@ const AdminPanel: React.FC = () => {
     
     streamRef.current = stream;
 
-    // Update main video element (what viewers see)
     if (videoRef.current) {
       videoRef.current.srcObject = stream;
-      videoRef.current.muted = true; // Always mute main preview to avoid feedback
+      videoRef.current.muted = true;
       await safePlay(videoRef.current, playPromiseRef);
     }
 
-    // Update preview video element (local preview with controls)
     if (previewVideoRef.current) {
       previewVideoRef.current.srcObject = stream;
       previewVideoRef.current.muted = previewMuted;
@@ -357,7 +349,6 @@ const AdminPanel: React.FC = () => {
     modeRef.current = newMode;
     const newId = generateUrl();
 
-    // Notify viewers
     if (bc.current) {
       bc.current.postMessage({
         type: 'STREAM_UPDATE',
@@ -370,7 +361,6 @@ const AdminPanel: React.FC = () => {
       });
     }
 
-    // Re-initiate WebRTC for all connected viewers
     peerConnections.current.forEach((_, id) => {
       peerConnections.current.get(id)?.close();
       initiateWebRTC(id, newId);
@@ -380,7 +370,6 @@ const AdminPanel: React.FC = () => {
     setIsFileUploading(false);
   };
 
-  // ── Start camera with selected devices and resolution ───────────────
   const startCamera = async () => {
     try {
       setError('');
@@ -406,7 +395,6 @@ const AdminPanel: React.FC = () => {
     }
   };
 
-  // ── Start screen share ──────────────────────────────────────────────
   const startScreen = async () => {
     try {
       setError('');
@@ -416,7 +404,6 @@ const AdminPanel: React.FC = () => {
         audio: true 
       });
       
-      // Handle user clicking "Stop sharing" button
       s.getVideoTracks()[0].addEventListener('ended', () => {
         stopStream();
       });
@@ -429,7 +416,7 @@ const AdminPanel: React.FC = () => {
     }
   };
 
-  // ── Handle file upload ──────────────────────────────────────────────
+  // Fixed file upload handler
   const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -452,22 +439,15 @@ const AdminPanel: React.FC = () => {
       // Create video element for file playback
       const videoUrl = URL.createObjectURL(file);
       
-      // Setup main video (what viewers see)
+      // Setup video elements
       if (videoRef.current) {
         videoRef.current.srcObject = null;
         videoRef.current.src = videoUrl;
         videoRef.current.loop = true;
-        videoRef.current.muted = true; // Main stream muted to avoid feedback
+        videoRef.current.muted = true;
         videoRef.current.crossOrigin = 'anonymous';
-        
-        await new Promise((resolve) => {
-          if (videoRef.current) {
-            videoRef.current.onloadedmetadata = resolve;
-          }
-        });
       }
 
-      // Setup preview video (local preview with controls)
       if (previewVideoRef.current) {
         previewVideoRef.current.srcObject = null;
         previewVideoRef.current.src = videoUrl;
@@ -477,25 +457,29 @@ const AdminPanel: React.FC = () => {
         previewVideoRef.current.crossOrigin = 'anonymous';
       }
 
-      // Wait for both videos to be ready
+      // Wait for video metadata to load
       await Promise.all([
         new Promise((resolve) => {
-          if (videoRef.current?.readyState >= 2) {
-            resolve(true);
-          } else if (videoRef.current) {
-            videoRef.current.oncanplay = resolve;
+          if (videoRef.current) {
+            if (videoRef.current.readyState >= 1) {
+              resolve(true);
+            } else {
+              videoRef.current.onloadedmetadata = resolve;
+            }
           }
         }),
         new Promise((resolve) => {
-          if (previewVideoRef.current?.readyState >= 2) {
-            resolve(true);
-          } else if (previewVideoRef.current) {
-            previewVideoRef.current.oncanplay = resolve;
+          if (previewVideoRef.current) {
+            if (previewVideoRef.current.readyState >= 1) {
+              resolve(true);
+            } else {
+              previewVideoRef.current.onloadedmetadata = resolve;
+            }
           }
         })
       ]);
 
-      // Start playing both videos
+      // Start playing
       await Promise.all([
         safePlay(videoRef.current, playPromiseRef),
         safePlay(previewVideoRef.current, previewPlayPromiseRef)
@@ -503,45 +487,74 @@ const AdminPanel: React.FC = () => {
 
       setIsPlaying(true);
 
-      // Capture stream from video element
-      if (videoRef.current && 'captureStream' in videoRef.current) {
-        // @ts-ignore - captureStream is available in modern browsers
-        const capturedStream = videoRef.current.captureStream(30); // 30 FPS
+      // For file upload, we need to use MediaRecorder to create a real-time stream
+      // This simulates a live stream from a file
+      if (videoRef.current) {
+        // Create a canvas to capture video frames
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        const video = videoRef.current;
         
-        if (capturedStream && capturedStream.getVideoTracks().length > 0) {
-          fileStreamRef.current = capturedStream;
-          streamRef.current = capturedStream;
-          
-          setMode(StreamMode.FILE_UPLOAD);
-          modeRef.current = StreamMode.FILE_UPLOAD;
-          
-          const newId = generateUrl();
-          
-          // Notify viewers
-          if (bc.current) {
-            bc.current.postMessage({
-              type: 'STREAM_UPDATE',
-              payload: { 
-                title: streamTitleRef.current, 
-                mode: StreamMode.FILE_UPLOAD, 
-                streamId: newId,
-                resolution: selectedResolution 
-              },
-            });
-          }
-
-          // Re-initiate WebRTC for all connected viewers
-          peerConnections.current.forEach((_, id) => {
-            peerConnections.current.get(id)?.close();
-            initiateWebRTC(id, newId);
-          });
-
-          setTip(getRandomTip());
-        } else {
-          throw new Error('Could not capture video stream');
+        canvas.width = selectedResolution.width;
+        canvas.height = selectedResolution.height;
+        
+        // Create a MediaStream from the canvas
+        const canvasStream = canvas.captureStream(30); // 30 FPS
+        
+        // Add audio track if available (simulated - no audio from canvas)
+        // For audio, we'll create a silent audio track
+        const audioContext = new AudioContext();
+        const destination = audioContext.createMediaStreamDestination();
+        const silentGain = audioContext.createGain();
+        silentGain.gain.value = 0;
+        silentGain.connect(destination);
+        
+        // Combine video and audio streams
+        const tracks = [...canvasStream.getVideoTracks()];
+        if (destination.stream.getAudioTracks().length > 0) {
+          tracks.push(destination.stream.getAudioTracks()[0]);
         }
+        
+        const finalStream = new MediaStream(tracks);
+        fileStreamRef.current = finalStream;
+        
+        // Start drawing video frames to canvas
+        const drawFrame = () => {
+          if (!video.paused && !video.ended && video.readyState >= 2) {
+            ctx?.drawImage(video, 0, 0, canvas.width, canvas.height);
+          }
+          requestAnimationFrame(drawFrame);
+        };
+        drawFrame();
+        
+        // Use this stream for WebRTC
+        streamRef.current = finalStream;
+        
+        setMode(StreamMode.FILE_UPLOAD);
+        modeRef.current = StreamMode.FILE_UPLOAD;
+        
+        const newId = generateUrl();
+        
+        if (bc.current) {
+          bc.current.postMessage({
+            type: 'STREAM_UPDATE',
+            payload: { 
+              title: streamTitleRef.current, 
+              mode: StreamMode.FILE_UPLOAD, 
+              streamId: newId,
+              resolution: selectedResolution 
+            },
+          });
+        }
+
+        peerConnections.current.forEach((_, id) => {
+          peerConnections.current.get(id)?.close();
+          initiateWebRTC(id, newId);
+        });
+
+        setTip(getRandomTip());
       } else {
-        throw new Error('Your browser does not support streaming from video files. Try Chrome or Edge.');
+        throw new Error('Could not initialize video element');
       }
     } catch (err: any) {
       console.error('File upload error:', err);
@@ -555,9 +568,7 @@ const AdminPanel: React.FC = () => {
     }
   };
 
-  // ── Stop stream ─────────────────────────────────────────────────────
   const stopStream = () => {
-    // Stop all tracks
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(t => {
         t.stop();
@@ -574,7 +585,6 @@ const AdminPanel: React.FC = () => {
       fileStreamRef.current = null;
     }
     
-    // Reset video elements
     [videoRef.current, previewVideoRef.current].forEach(v => {
       if (v) {
         safePause(v);
@@ -584,7 +594,6 @@ const AdminPanel: React.FC = () => {
       }
     });
     
-    // Close all peer connections
     peerConnections.current.forEach(pc => {
       try { pc.close(); } catch (e) { console.error('Error closing peer connection:', e); }
     });
@@ -623,7 +632,6 @@ const AdminPanel: React.FC = () => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch { 
-      // Fallback for older browsers
       const textarea = document.createElement('textarea');
       textarea.value = streamUrl;
       document.body.appendChild(textarea);
@@ -641,7 +649,7 @@ const AdminPanel: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-gray-50 font-sans text-gray-900">
-      {/* ── Header ── */}
+      {/* Header */}
       <header className="bg-white border-b border-gray-200 px-4 sm:px-8 py-4 flex items-center justify-between sticky top-0 z-40">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 bg-black rounded-lg flex items-center justify-center">
@@ -679,7 +687,7 @@ const AdminPanel: React.FC = () => {
       </header>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-8 py-4 sm:py-8 grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-8">
-        {/* ── Left sidebar ── */}
+        {/* Left sidebar */}
         <div className="space-y-4 sm:space-y-5">
           {/* Stream title */}
           <div className="bg-white rounded-2xl border border-gray-200 p-4 sm:p-5">
@@ -725,7 +733,6 @@ const AdminPanel: React.FC = () => {
 
             {showDeviceMenu && (
               <div className="space-y-4">
-                {/* Video Device */}
                 {videoDevices.length > 0 && (
                   <div>
                     <label className="block text-xs text-gray-500 mb-1">Camera</label>
@@ -741,7 +748,6 @@ const AdminPanel: React.FC = () => {
                   </div>
                 )}
 
-                {/* Audio Device */}
                 {audioDevices.length > 0 && (
                   <div>
                     <label className="block text-xs text-gray-500 mb-1">Microphone</label>
@@ -757,7 +763,6 @@ const AdminPanel: React.FC = () => {
                   </div>
                 )}
 
-                {/* Resolution */}
                 <div>
                   <label className="block text-xs text-gray-500 mb-1">Resolution</label>
                   <select
@@ -848,9 +853,9 @@ const AdminPanel: React.FC = () => {
           )}
         </div>
 
-        {/* ── Main ── */}
+        {/* Main */}
         <div className="lg:col-span-2 space-y-4 sm:space-y-5">
-          {/* Main Stream Video (what viewers see) */}
+          {/* Main Stream Video */}
           <div className="bg-black rounded-2xl overflow-hidden aspect-video relative shadow-sm">
             <video 
               ref={videoRef} 
@@ -883,14 +888,12 @@ const AdminPanel: React.FC = () => {
                   <span className="text-white text-xs font-bold tracking-wide">LIVE</span>
                 </div>
                 
-                {/* Stream title overlay */}
                 {streamTitle && (
                   <div className="absolute bottom-4 left-4 right-4 z-10">
                     <p className="text-white text-sm font-semibold drop-shadow-lg truncate">{streamTitle}</p>
                   </div>
                 )}
 
-                {/* Viewer count overlay */}
                 <div className="absolute top-4 right-4 flex items-center gap-1.5 px-2.5 py-1.5 bg-black/50 backdrop-blur-sm rounded-lg z-10">
                   <svg className="w-3.5 h-3.5 text-white/70" fill="currentColor" viewBox="0 0 24 24">
                     <path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/>
@@ -901,7 +904,7 @@ const AdminPanel: React.FC = () => {
             )}
           </div>
 
-          {/* Local Preview with Controls (for latency check) */}
+          {/* Local Preview */}
           {isLive && (
             <div 
               className="bg-white rounded-2xl border border-gray-200 p-4 sm:p-5"
@@ -925,7 +928,6 @@ const AdminPanel: React.FC = () => {
                 <div className={`absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent transition-opacity duration-300 ${showPreviewControls ? 'opacity-100' : 'opacity-0'}`}>
                   <div className="absolute bottom-0 left-0 right-0 p-3">
                     <div className="flex items-center gap-2">
-                      {/* Play/Pause */}
                       <button
                         onClick={togglePreviewPlay}
                         className="p-2 text-white hover:text-white/70 transition-colors rounded-lg hover:bg-white/10"
@@ -942,7 +944,6 @@ const AdminPanel: React.FC = () => {
                         )}
                       </button>
 
-                      {/* Mute/Unmute */}
                       <button
                         onClick={togglePreviewMute}
                         className="p-2 text-white hover:text-white/70 transition-colors rounded-lg hover:bg-white/10"
@@ -958,7 +959,6 @@ const AdminPanel: React.FC = () => {
                         )}
                       </button>
 
-                      {/* Volume Slider (only if not muted) */}
                       {!previewMuted && (
                         <div className="flex-1 max-w-[100px]">
                           <input
@@ -976,7 +976,6 @@ const AdminPanel: React.FC = () => {
                         </div>
                       )}
 
-                      {/* Latency indicator */}
                       <span className="text-white/50 text-xs ml-auto">
                         {previewMuted ? '🔇' : `🔊 ${Math.round(previewVolume * 100)}%`}
                       </span>
