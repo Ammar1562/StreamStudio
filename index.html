@@ -2,15 +2,20 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>StreamStudio - Live Broadcasting</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>StreamStudio – Live Broadcasting</title>
+
+  <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
-  <!-- PeerJS: WebRTC signaling for cross-device streaming -->
-  <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+
+  <!-- PeerJS -->
+  <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js" defer></script>
+
   <style>
+    /* ---------- Animations ---------- */
     @keyframes live-pulse {
       0%, 100% { opacity: 1; }
-      50% { opacity: 0.35; }
+      50% { opacity: 0.4; }
     }
     .live-dot { animation: live-pulse 1.2s ease-in-out infinite; }
 
@@ -19,54 +24,95 @@
     }
     .spin { animation: spin 0.75s linear infinite; }
 
-    body { user-select: none; -webkit-user-select: none; }
+    /* ---------- Custom Scrollbar ---------- */
+    .custom-scrollbar::-webkit-scrollbar {
+      width: 4px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb {
+      background: #101010;
+      border-radius: 4px;
+    }
 
-    /* Progress bar thumb */
-    input[type=range].seek-bar {
+    /* ---------- Seek Bar ---------- */
+    input[type="range"].seek-bar {
       -webkit-appearance: none;
       appearance: none;
       background: transparent;
+      width: 100%;
       cursor: pointer;
     }
-    input[type=range].seek-bar::-webkit-slider-thumb {
+    input[type="range"].seek-bar::-webkit-slider-thumb {
       -webkit-appearance: none;
-      width: 13px; height: 13px;
+      width: 12px;
+      height: 12px;
       border-radius: 50%;
       background: white;
-      margin-top: -4.5px;
+      margin-top: -4px;
       opacity: 0;
-      transition: opacity 0.15s;
+      transition: opacity 0.2s;
     }
-    .seek-container:hover input[type=range].seek-bar::-webkit-slider-thumb { opacity: 1; }
-    input[type=range].seek-bar::-webkit-slider-runnable-track { height: 4px; background: transparent; }
+    .group:hover input[type="range"].seek-bar::-webkit-slider-thumb {
+      opacity: 1;
+    }
+    input[type="range"].seek-bar::-webkit-slider-runnable-track {
+      height: 4px;
+      background: transparent;
+    }
 
-    /* Volume slider */
-    input[type=range].vol-bar {
-      -webkit-appearance: none; appearance: none;
-      background: transparent; cursor: pointer;
-    }
-    input[type=range].vol-bar::-webkit-slider-thumb {
+    /* ---------- Volume Slider ---------- */
+    input[type="range"].volume-slider {
       -webkit-appearance: none;
-      width: 11px; height: 11px;
-      border-radius: 50%; background: white; margin-top: -3.5px;
+      appearance: none;
+      height: 4px;
+      border-radius: 2px;
+      outline: none;
+      cursor: pointer;
     }
-    input[type=range].vol-bar::-webkit-slider-runnable-track { height: 4px; background: transparent; }
+    input[type="range"].volume-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: white;
+      cursor: pointer;
+    }
 
-    .custom-scrollbar::-webkit-scrollbar { width: 4px; }
-    .custom-scrollbar::-webkit-scrollbar-track { background: rgba(255,255,255,0.02); }
-    .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 10px; }
+    /* ---------- Mobile Optimizations ---------- */
+    @media (max-width: 640px) {
+      .video-container {
+        aspect-ratio: 16/9;
+        width: 100%;
+      }
+    }
+
+    /* ---------- Global UX ---------- */
+    body {
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+    html {
+      scroll-behavior: smooth;
+    }
   </style>
-<script type="importmap">
-{
-  "imports": {
-    "react/": "https://esm.sh/react@^19.2.4/",
-    "react": "https://esm.sh/react@^19.2.4",
-    "react-dom/": "https://esm.sh/react-dom@^19.2.4/"
-  }
-}
-</script>
+
+  <!-- Import Maps -->
+  <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@^19.2.4",
+        "react/": "https://esm.sh/react@^19.2.4/",
+        "react-dom": "https://esm.sh/react-dom@^19.2.4",
+        "react-dom/": "https://esm.sh/react-dom@^19.2.4/"
+      }
+    }
+  </script>
 </head>
-<body class="bg-[#0f0f0f] text-white overflow-x-hidden">
+
+<body class="bg-white overflow-x-hidden">
   <div id="root"></div>
   <script type="module" src="/index.tsx"></script>
 </body>

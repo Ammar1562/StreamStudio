@@ -3,7 +3,10 @@ import AdminPanel from './components/AdminPanel';
 import ViewerPage from './components/ViewerPage';
 
 const App: React.FC = () => {
-  const [route, setRoute] = useState<string>(window.location.hash || '#/');
+  const [route, setRoute] = useState<string>(() => {
+    // SSR guard: ensure we only read window on the client
+    return typeof window !== 'undefined' ? window.location.hash || '#/' : '#/';
+  });
 
   const handleHashChange = useCallback(() => {
     setRoute(window.location.hash || '#/');
@@ -24,44 +27,43 @@ const App: React.FC = () => {
     }
 
     return (
-      <div className="min-h-screen bg-white flex flex-col items-center justify-center px-6">
-        <div className="max-w-md w-full text-center space-y-8">
-
-          {/* Logo */}
-          <div className="flex flex-col items-center gap-4">
-            <div className="w-14 h-14 bg-black rounded-2xl flex items-center justify-center shadow-lg">
-              <svg className="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+      <div className="min-h-screen bg-white flex items-center justify-center p-4">
+        <div className="max-w-md w-full">
+          {/* Header */}
+          <div className="text-center mb-8">
+            <div className="inline-flex items-center justify-center w-16 h-16 bg-gray-900 rounded-full mb-4">
+              <svg className="w-8 h-8 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
               </svg>
             </div>
-            <div>
-              <h1 className="text-3xl font-bold text-gray-900 tracking-tight">StreamStudio</h1>
-              <p className="text-gray-400 text-sm mt-1">Simple, secure live broadcasting</p>
-            </div>
+            <h1 className="text-3xl font-bold text-gray-900">StreamStudios</h1>
+            <p className="text-gray-500 mt-2">Simple, secure live broadcasting</p>
           </div>
 
           {/* CTA */}
           <div className="space-y-3">
             <button
-              onClick={() => (window.location.hash = '#/admin')}
-              className="w-full py-3.5 bg-black text-white font-semibold rounded-xl hover:bg-gray-800 transition-colors text-sm"
+              onClick={() => {
+                window.location.hash = '#/admin';
+              }}
+              className="w-full py-3 bg-gray-900 text-white font-medium rounded-full hover:bg-gray-800 transition-colors focus:outline-none focus:ring-2 focus:ring-gray-700"
+              type="button"
             >
               Open Broadcast Studio
             </button>
-            <p className="text-xs text-gray-400">Viewers access via a private link — no account needed</p>
+            <p className="text-xs text-gray-400 text-center">No account needed • Private streaming links</p>
           </div>
 
           {/* Features */}
-          <div className="grid grid-cols-3 gap-4 pt-4 border-t border-gray-100">
+          <div className="grid grid-cols-3 gap-4 mt-8 pt-8 border-t border-gray-100">
             {[
-              { icon: '🔗', label: 'Unique URL', sub: 'per session' },
-              { icon: '🔒', label: 'Encrypted', sub: 'end-to-end' },
-              { icon: '📡', label: 'WebRTC', sub: 'low latency' },
-            ].map(f => (
-              <div key={f.label} className="text-center space-y-1">
-                <div className="text-2xl">{f.icon}</div>
-                <div className="text-xs font-semibold text-gray-700">{f.label}</div>
-                <div className="text-xs text-gray-400">{f.sub}</div>
+              { icon: '🔗', label: 'Private Links' },
+              { icon: '🔒', label: 'Encrypted' },
+              { icon: '📱', label: 'Cross-device' },
+            ].map((f) => (
+              <div key={f.label} className="text-center">
+                <div className="text-2xl mb-1">{f.icon}</div>
+                <div className="text-xs font-medium text-gray-700">{f.label}</div>
               </div>
             ))}
           </div>
@@ -70,7 +72,33 @@ const App: React.FC = () => {
     );
   };
 
-  return <div className="min-h-screen">{renderView()}</div>;
+  return (
+    <>
+      <style>{`
+        /* Custom scrollbar from index.html */
+        ::-webkit-scrollbar {
+          width: 8px;
+          height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+          background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+          background: #4d4d4dff;
+          border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+          background: #161616ff;
+        }
+        /* Firefox */
+        * {
+          scrollbar-width: thin;
+          scrollbar-color: #4d4d4dff transparent;
+        }
+      `}</style>
+      {renderView()}
+    </>
+  );
 };
 
 export default App;
