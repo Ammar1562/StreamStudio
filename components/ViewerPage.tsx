@@ -18,9 +18,10 @@ const ICE_SERVERS = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
   { urls: 'stun:stun2.l.google.com:19302' },
-  { urls: 'turn:a.relay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
-  { urls: 'turn:a.relay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
-  { urls: 'turn:a.relay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
+  { urls: 'stun:stun3.l.google.com:19302' },
+  { urls: 'stun:stun4.l.google.com:19302' },
+  { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+  { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
 ];
 
 const QUALITY_LEVELS: QualityLevel[] = [
@@ -33,13 +34,10 @@ const QUALITY_LEVELS: QualityLevel[] = [
 ];
 
 const ViewerPage: React.FC<ViewerPageProps> = ({ streamId }) => {
-  const [status, setStatus] = useState<'connecting' | 'live' | 'ended' | 'reconnecting'>('connecting');
+  const [status, setStatus] = useState<'connecting' | 'live' | 'ended'>('connecting');
   const [errorMsg, setErrorMsg] = useState('');
-  const [connectionAttempts, setConnectionAttempts] = useState(0);
-  const [networkQuality, setNetworkQuality] = useState<'good' | 'fair' | 'poor'>('good');
-  const [selectedQuality, setSelectedQuality] = useState<QualityLevel>(QUALITY_LEVELS[0]);
-  const [availableQualities, setAvailableQualities] = useState<QualityLevel[]>(QUALITY_LEVELS);
-
+  const [connectionTime, setConnectionTime] = useState(0);
+  
   // Player state
   const [playing, setPlaying] = useState(false);
   const [muted, setMuted] = useState(false);
@@ -53,11 +51,13 @@ const ViewerPage: React.FC<ViewerPageProps> = ({ streamId }) => {
   const [hasAudio, setHasAudio] = useState(false);
   const [audioLevel, setAudioLevel] = useState(0);
   const [isBuffering, setIsBuffering] = useState(false);
+  const [selectedQuality, setSelectedQuality] = useState<QualityLevel>(QUALITY_LEVELS[0]);
+  const [networkQuality, setNetworkQuality] = useState<'good' | 'fair' | 'poor'>('good');
   const [stats, setStats] = useState({ 
     resolution: 'Loading...', 
     bitrate: 0,
     fps: 0,
-    droppedFrames: 0 
+    latency: 0
   });
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -65,148 +65,76 @@ const ViewerPage: React.FC<ViewerPageProps> = ({ streamId }) => {
   const peerRef = useRef<any>(null);
   const callRef = useRef<any>(null);
   const controlsTimer = useRef<number | null>(null);
-  const retryTimer = useRef<number | null>(null);
-  const reconnectAttempts = useRef(0);
   const mountedRef = useRef(true);
+  const connectionStartTime = useRef(Date.now());
   const statsInterval = useRef<number | null>(null);
-  const qualityCheckInterval = useRef<number | null>(null);
-  const lastBitrateCheck = useRef({ time: Date.now(), bytes: 0 });
+  const reconnectAttempts = useRef(0);
 
   const adminPeerId = `${PEER_PREFIX}${streamId}`;
 
-  // Network quality detection
-  const checkNetworkQuality = useCallback(() => {
-    if (!videoRef.current || !mountedRef.current) return;
+  // Format time for display
+  const formatTime = (ms: number) => {
+    const seconds = Math.floor(ms / 1000);
+    if (seconds < 60) return `${seconds}s`;
+    return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+  };
+
+  // Monitor connection quality
+  const updateStats = useCallback(() => {
+    if (!videoRef.current || status !== 'live') return;
 
     const video = videoRef.current;
-    const now = Date.now();
     
-    // Check buffering state
+    // Check buffering
     if (video.buffered.length > 0) {
       const bufferedEnd = video.buffered.end(video.buffered.length - 1);
       const currentTime = video.currentTime;
       const bufferedAhead = bufferedEnd - currentTime;
       
-      if (bufferedAhead < 2) {
+      if (bufferedAhead < 1) {
         setNetworkQuality('poor');
-      } else if (bufferedAhead < 5) {
+      } else if (bufferedAhead < 3) {
         setNetworkQuality('fair');
       } else {
         setNetworkQuality('good');
       }
     }
 
-    // Adjust quality based on network
-    if (selectedQuality.label === 'Auto' && hasVideo) {
-      const currentQuality = availableQualities.find(q => 
-        q.height === parseInt(stats.resolution.split('x')[1])
-      ) || availableQualities[3];
-
-      if (networkQuality === 'poor' && currentQuality.height > 480) {
-        // Switch to lower quality
-        const lowerQuality = availableQualities.find(q => q.height === 480) || availableQualities[4];
-        applyQuality(lowerQuality);
-      } else if (networkQuality === 'fair' && currentQuality.height < 480) {
-        // Switch to medium quality
-        const mediumQuality = availableQualities.find(q => q.height === 720) || availableQualities[2];
-        applyQuality(mediumQuality);
-      } else if (networkQuality === 'good' && currentQuality.height < 720) {
-        // Switch to higher quality
-        const highQuality = availableQualities.find(q => q.height === 1080) || availableQualities[1];
-        applyQuality(highQuality);
-      }
+    // Get video stats
+    if (video.videoWidth && video.videoHeight) {
+      setStats(prev => ({
+        ...prev,
+        resolution: `${video.videoWidth}x${video.videoHeight}`,
+        fps: 30 // Estimated
+      }));
     }
-  }, [networkQuality, selectedQuality.label, availableQualities, stats.resolution, hasVideo]);
 
-  const applyQuality = useCallback((quality: QualityLevel) => {
-    if (!videoRef.current || !callRef.current) return;
-
-    try {
-      // For WebRTC, we can't directly change resolution, but we can:
-      // 1. Signal the broadcaster to change quality (implement if broadcaster supports it)
-      // 2. Adjust video element size
-      if (quality.height > 0) {
-        const video = videoRef.current;
-        video.style.maxWidth = `${quality.height * (16/9)}px`;
-        video.style.maxHeight = `${quality.height}px`;
-      }
-      
-      setSelectedQuality(quality);
-    } catch (err) {
-      console.warn('[Viewer] Failed to apply quality:', err);
-    }
-  }, []);
-
-  // Monitor stream stats
-  const updateStats = useCallback(() => {
-    if (!videoRef.current || !callRef.current || !mountedRef.current) return;
-
-    const video = videoRef.current;
-    const now = Date.now();
-
-    // Get video track stats if available
+    // Calculate latency (time since last frame)
     if (video.srcObject) {
       const videoTracks = (video.srcObject as MediaStream).getVideoTracks();
       if (videoTracks.length > 0) {
         const settings = videoTracks[0].getSettings();
-        
-        // Calculate bitrate (simplified)
-        const bytesPerSecond = (video.videoWidth * video.videoHeight * 30 * 0.1) / 1000; // Rough estimate
-        const deltaTime = (now - lastBitrateCheck.current.time) / 1000;
-        
-        if (deltaTime > 1) {
-          const bitrate = bytesPerSecond * 8; // Convert to bits
-          setStats(prev => ({
-            ...prev,
-            resolution: settings.width && settings.height 
-              ? `${settings.width}x${settings.height}`
-              : 'Unknown',
-            bitrate: Math.round(bitrate),
-            fps: settings.frameRate || 30
-          }));
-          
-          lastBitrateCheck.current = { time: now, bytes: bytesPerSecond };
+        if (settings.frameRate) {
+          setStats(prev => ({ ...prev, fps: Math.round(settings.frameRate || 30) }));
         }
       }
     }
+  }, [status]);
 
-    // Check for dropped frames (if supported)
-    if ('webkitDroppedFrameCount' in video) {
-      setStats(prev => ({
-        ...prev,
-        droppedFrames: (video as any).webkitDroppedFrameCount || 0
-      }));
-    }
-  }, []);
-
-  // Clean up connection
+  // Clean up
   const cleanup = useCallback(() => {
     if (statsInterval.current) {
       clearInterval(statsInterval.current);
       statsInterval.current = null;
     }
-    
-    if (qualityCheckInterval.current) {
-      clearInterval(qualityCheckInterval.current);
-      qualityCheckInterval.current = null;
-    }
-    
-    if (retryTimer.current) {
-      clearTimeout(retryTimer.current);
-      retryTimer.current = null;
-    }
 
     if (callRef.current) {
-      try { 
-        callRef.current.close(); 
-      } catch {}
+      try { callRef.current.close(); } catch {}
       callRef.current = null;
     }
     
     if (peerRef.current) {
-      try { 
-        peerRef.current.destroy(); 
-      } catch {}
+      try { peerRef.current.destroy(); } catch {}
       peerRef.current = null;
     }
 
@@ -225,31 +153,66 @@ const ViewerPage: React.FC<ViewerPageProps> = ({ streamId }) => {
     cleanup();
     setStatus('connecting');
     setErrorMsg('');
+    connectionStartTime.current = Date.now();
+    reconnectAttempts.current++;
 
     // Generate unique viewer ID
-    const viewerId = `viewer-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+    const viewerId = `v-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`;
 
     try {
+      // Create peer with optimized settings for fast connection
       const peer = new Peer(viewerId, { 
-        config: { iceServers: ICE_SERVERS },
-        debug: 0 // Disable debug logs in production
+        config: { 
+          iceServers: ICE_SERVERS,
+          iceTransportPolicy: 'all',
+          iceCandidatePoolSize: 10 // Faster connection
+        },
+        debug: 0
       });
       
       peerRef.current = peer;
 
-      peer.on('open', () => {
-        if (!mountedRef.current) return;
-        console.log('[Viewer] Connected to signaling server');
-        reconnectAttempts.current = 0;
+      // Set timeout for connection
+      const connectionTimeout = setTimeout(() => {
+        if (status === 'connecting' && mountedRef.current) {
+          if (reconnectAttempts.current < 3) {
+            connectToBroadcaster();
+          } else {
+            setStatus('ended');
+            setErrorMsg('Connection timeout');
+          }
+        }
+      }, 10000);
 
-        // Call the broadcaster without dummy stream
+      peer.on('open', () => {
+        clearTimeout(connectionTimeout);
+        
+        if (!mountedRef.current) return;
+        
+        console.log('[Viewer] Connected to signaling');
+        
+        // Call broadcaster with empty stream
         const call = peer.call(adminPeerId, new MediaStream());
         callRef.current = call;
 
+        // Set call timeout
+        const callTimeout = setTimeout(() => {
+          if (status === 'connecting' && mountedRef.current) {
+            call.close();
+            if (reconnectAttempts.current < 3) {
+              connectToBroadcaster();
+            }
+          }
+        }, 5000);
+
         call.on('stream', (remoteStream: MediaStream) => {
+          clearTimeout(callTimeout);
+          
           if (!mountedRef.current) return;
           
-          console.log('[Viewer] Received stream');
+          console.log('[Viewer] Stream received in', Date.now() - connectionStartTime.current, 'ms');
+          setConnectionTime(Date.now() - connectionStartTime.current);
+          
           const videoTracks = remoteStream.getVideoTracks();
           const audioTracks = remoteStream.getAudioTracks();
           
@@ -259,92 +222,60 @@ const ViewerPage: React.FC<ViewerPageProps> = ({ streamId }) => {
           if (videoRef.current) {
             videoRef.current.srcObject = remoteStream;
             
-            // Start playing automatically
-            videoRef.current.play().catch(err => {
-              console.warn('[Viewer] Autoplay failed:', err);
-              setPlaying(false);
-            });
+            // Start playing immediately
+            videoRef.current.play()
+              .then(() => {
+                setPlaying(true);
+                setStatus('live');
+                reconnectAttempts.current = 0;
+              })
+              .catch(err => {
+                console.warn('[Viewer] Autoplay failed:', err);
+                setPlaying(false);
+                setStatus('live'); // Still live, just need user interaction
+              });
           }
-
-          setStatus('live');
-          setIsBuffering(false);
 
           // Start stats monitoring
           if (!statsInterval.current) {
             statsInterval.current = window.setInterval(updateStats, 2000);
           }
-          
-          if (!qualityCheckInterval.current) {
-            qualityCheckInterval.current = window.setInterval(checkNetworkQuality, 3000);
-          }
         });
 
         call.on('close', () => {
-          if (!mountedRef.current) return;
-          console.log('[Viewer] Call closed');
-          
-          if (status === 'live') {
-            setStatus('reconnecting');
-            // Attempt to reconnect
-            if (reconnectAttempts.current < 3) {
-              reconnectAttempts.current++;
-              retryTimer.current = window.setTimeout(connectToBroadcaster, 2000);
-            } else {
-              setStatus('ended');
-              setErrorMsg('Broadcast ended');
-            }
+          clearTimeout(callTimeout);
+          if (mountedRef.current && status === 'live') {
+            setStatus('ended');
+            setErrorMsg('Broadcast ended');
           }
         });
 
         call.on('error', (err: any) => {
+          clearTimeout(callTimeout);
           console.warn('[Viewer] Call error:', err);
           
-          if (!mountedRef.current) return;
-          
-          if (reconnectAttempts.current < 3) {
-            reconnectAttempts.current++;
-            setStatus('reconnecting');
-            retryTimer.current = window.setTimeout(connectToBroadcaster, 2000 * reconnectAttempts.current);
-          } else {
+          if (mountedRef.current && status === 'live') {
             setStatus('ended');
-            setErrorMsg('Connection failed');
+            setErrorMsg('Connection lost');
           }
         });
       });
 
       peer.on('error', (err: any) => {
+        clearTimeout(connectionTimeout);
         console.warn('[Viewer] Peer error:', err.type);
         
         if (!mountedRef.current) return;
 
         if (err.type === 'peer-unavailable') {
-          // Broadcaster not live
-          if (reconnectAttempts.current < 5) {
-            reconnectAttempts.current++;
-            setStatus('reconnecting');
-            retryTimer.current = window.setTimeout(connectToBroadcaster, 3000);
-          } else {
-            setStatus('ended');
-            setErrorMsg('Broadcaster is offline');
-          }
-        } else if (err.type === 'network' || err.type === 'server-error') {
-          // Network issues - retry with backoff
-          const delay = Math.min(1000 * Math.pow(2, reconnectAttempts.current), 10000);
-          reconnectAttempts.current++;
-          setStatus('reconnecting');
-          retryTimer.current = window.setTimeout(connectToBroadcaster, delay);
-        }
-      });
-
-      peer.on('disconnected', () => {
-        console.log('[Viewer] Disconnected from signaling');
-        
-        if (!mountedRef.current) return;
-        
-        if (reconnectAttempts.current < 3) {
-          reconnectAttempts.current++;
-          setStatus('reconnecting');
-          retryTimer.current = window.setTimeout(connectToBroadcaster, 3000);
+          setStatus('ended');
+          setErrorMsg('Stream is not live');
+        } else if (reconnectAttempts.current < 3) {
+          // Retry with backoff
+          setTimeout(connectToBroadcaster, 1000 * reconnectAttempts.current);
+        } else {
+          setStatus('ended');
+          setErrorMsg('Connection failed');
         }
       });
 
@@ -353,10 +284,10 @@ const ViewerPage: React.FC<ViewerPageProps> = ({ streamId }) => {
       
       if (mountedRef.current) {
         setStatus('ended');
-        setErrorMsg('Failed to initialize connection');
+        setErrorMsg('Failed to initialize');
       }
     }
-  }, [adminPeerId, cleanup, updateStats, checkNetworkQuality, status]);
+  }, [adminPeerId, cleanup, updateStats, status]);
 
   // Initialize connection
   useEffect(() => {
@@ -393,20 +324,10 @@ const ViewerPage: React.FC<ViewerPageProps> = ({ streamId }) => {
       setIsBuffering(false);
       setStatus('live');
     };
-    const onError = (e: Event) => {
-      console.error('[Viewer] Video error:', e);
-      
+    const onError = () => {
       if (status === 'live') {
-        setStatus('reconnecting');
-        if (reconnectAttempts.current < 3) {
-          reconnectAttempts.current++;
-          retryTimer.current = window.setTimeout(connectToBroadcaster, 2000);
-        }
-      }
-    };
-    const onStalled = () => {
-      if (status === 'live') {
-        setIsBuffering(true);
+        setStatus('ended');
+        setErrorMsg('Playback error');
       }
     };
 
@@ -416,7 +337,6 @@ const ViewerPage: React.FC<ViewerPageProps> = ({ streamId }) => {
     video.addEventListener('waiting', onWaiting);
     video.addEventListener('playing', onPlaying);
     video.addEventListener('error', onError);
-    video.addEventListener('stalled', onStalled);
 
     return () => {
       video.removeEventListener('play', onPlay);
@@ -425,9 +345,8 @@ const ViewerPage: React.FC<ViewerPageProps> = ({ streamId }) => {
       video.removeEventListener('waiting', onWaiting);
       video.removeEventListener('playing', onPlaying);
       video.removeEventListener('error', onError);
-      video.removeEventListener('stalled', onStalled);
     };
-  }, [connectToBroadcaster, status]);
+  }, [status]);
 
   const togglePlay = useCallback(() => {
     const video = videoRef.current;
@@ -464,6 +383,11 @@ const ViewerPage: React.FC<ViewerPageProps> = ({ streamId }) => {
     }
   }, []);
 
+  const applyQuality = useCallback((quality: QualityLevel) => {
+    setSelectedQuality(quality);
+    setShowSettings(false);
+  }, []);
+
   const toggleFullscreen = useCallback(async () => {
     if (!containerRef.current) return;
     
@@ -490,7 +414,7 @@ const ViewerPage: React.FC<ViewerPageProps> = ({ streamId }) => {
     }, 3000);
   }, [playing]);
 
-  // Render status screens
+  // Render ended state
   if (status === 'ended') {
     return (
       <div className="min-h-screen bg-white flex items-center justify-center p-6">
@@ -518,12 +442,11 @@ const ViewerPage: React.FC<ViewerPageProps> = ({ streamId }) => {
   const volumePercent = (muted ? 0 : volume) * 100;
 
   return (
-    <div className="min-h-screen bg-white">
+    <div className="min-h-screen bg-black">
       {/* Player Container */}
       <div
         ref={containerRef}
-        className={`relative bg-black ${fullscreen ? 'fixed inset-0 z-50' : 'w-full'}`}
-        style={!fullscreen ? { aspectRatio: '16/9' } : {}}
+        className={`relative bg-black ${fullscreen ? 'fixed inset-0 z-50' : 'w-full h-screen'}`}
         onMouseMove={resetControls}
         onMouseLeave={() => {
           if (controlsTimer.current) clearTimeout(controlsTimer.current);
@@ -543,24 +466,25 @@ const ViewerPage: React.FC<ViewerPageProps> = ({ streamId }) => {
           onDoubleClick={toggleFullscreen}
         />
 
-        {/* Connection Status Overlays */}
-        {(status === 'connecting' || status === 'reconnecting') && (
-          <div className="absolute inset-0 flex items-center justify-center bg-gray-900/90">
+        {/* Connecting Overlay - With progress indicator */}
+        {status === 'connecting' && (
+          <div className="absolute inset-0 flex items-center justify-center bg-gray-900">
             <div className="text-center">
-              <div className="w-12 h-12 border-3 border-gray-600 border-t-white rounded-full spin mx-auto mb-4" />
-              <p className="text-white/90 text-sm font-medium">
-                {status === 'connecting' ? 'Connecting to stream...' : 'Reconnecting...'}
+              <div className="w-16 h-16 border-4 border-gray-700 border-t-white rounded-full spin mx-auto mb-4" />
+              <p className="text-white text-lg font-medium">Connecting to stream...</p>
+              <p className="text-gray-400 text-sm mt-2">
+                {connectionTime > 0 ? formatTime(connectionTime) : 'Establishing connection'}
               </p>
-              <p className="text-white/50 text-xs mt-2">
-                {status === 'reconnecting' && `Attempt ${reconnectAttempts.current}/3`}
+              <p className="text-gray-600 text-xs mt-4 font-mono">
+                {streamId.slice(0, 8)}…{streamId.slice(-4)}
               </p>
               
-              {connectionAttempts > 2 && (
+              {connectionTime > 5000 && (
                 <button
                   onClick={connectToBroadcaster}
-                  className="mt-4 px-4 py-2 bg-white/10 hover:bg-white/20 rounded-lg text-white text-sm transition-colors"
+                  className="mt-6 px-6 py-2 bg-white/10 hover:bg-white/20 rounded-lg text-white text-sm transition-colors"
                 >
-                  Retry Now
+                  Retry Connection
                 </button>
               )}
             </div>
@@ -569,14 +493,21 @@ const ViewerPage: React.FC<ViewerPageProps> = ({ streamId }) => {
 
         {/* Network Quality Indicator */}
         {status === 'live' && networkQuality !== 'good' && (
-          <div className="absolute top-3 right-3 px-2 py-1 bg-yellow-500/80 rounded-md text-xs text-white">
+          <div className="absolute top-4 right-4 px-3 py-1.5 bg-yellow-500/90 rounded-full text-xs text-white font-medium backdrop-blur-sm">
             {networkQuality === 'poor' ? 'Poor Network' : 'Fair Network'}
+          </div>
+        )}
+
+        {/* Connection Time Badge */}
+        {status === 'live' && connectionTime > 0 && (
+          <div className="absolute top-4 left-4 px-3 py-1.5 bg-black/50 backdrop-blur-sm rounded-full text-xs text-white">
+            Connected in {formatTime(connectionTime)}
           </div>
         )}
 
         {/* Audio Status */}
         {hasVideo && !hasAudio && (
-          <div className="absolute top-3 left-3 px-2 py-1 bg-yellow-500/80 rounded-md text-xs text-white">
+          <div className="absolute top-4 left-4 px-3 py-1.5 bg-yellow-500/90 rounded-full text-xs text-white backdrop-blur-sm">
             No Audio
           </div>
         )}
@@ -584,18 +515,18 @@ const ViewerPage: React.FC<ViewerPageProps> = ({ streamId }) => {
         {/* Buffering Spinner */}
         {isBuffering && status === 'live' && (
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none bg-black/20">
-            <div className="w-10 h-10 border-2 border-white/20 border-t-white rounded-full spin" />
+            <div className="w-12 h-12 border-3 border-white/30 border-t-white rounded-full spin" />
           </div>
         )}
 
-        {/* Play Overlay (when paused) */}
+        {/* Play Overlay */}
         {hasVideo && !playing && !isBuffering && status === 'live' && (
           <div
-            className="absolute inset-0 flex items-center justify-center cursor-pointer bg-black/20"
+            className="absolute inset-0 flex items-center justify-center cursor-pointer bg-black/40"
             onClick={togglePlay}
           >
-            <div className="w-16 h-16 bg-white/90 rounded-full flex items-center justify-center hover:bg-white transition-colors">
-              <svg className="w-8 h-8 text-gray-900 ml-1" viewBox="0 0 24 24" fill="currentColor">
+            <div className="w-20 h-20 bg-white/90 rounded-full flex items-center justify-center hover:bg-white transition-colors transform hover:scale-105">
+              <svg className="w-10 h-10 text-gray-900 ml-1" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M8 5v14l11-7z" />
               </svg>
             </div>
@@ -604,7 +535,7 @@ const ViewerPage: React.FC<ViewerPageProps> = ({ streamId }) => {
 
         {/* Controls Overlay */}
         <div
-          className={`absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-black/40 transition-opacity duration-300 ${
+          className={`absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/40 transition-opacity duration-300 ${
             showControls || !playing ? 'opacity-100' : 'opacity-0 pointer-events-none'
           }`}
         >
@@ -612,16 +543,16 @@ const ViewerPage: React.FC<ViewerPageProps> = ({ streamId }) => {
           <div className="absolute top-0 left-0 right-0 p-4 flex items-center justify-between">
             <div className="flex items-center gap-2">
               {status === 'live' && (
-                <span className="flex items-center gap-1.5 px-2 py-1 bg-red-500 rounded-md">
-                  <span className="w-1.5 h-1.5 bg-white rounded-full live-dot" />
+                <span className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 rounded-full">
+                  <span className="w-2 h-2 bg-white rounded-full animate-pulse" />
                   <span className="text-white text-xs font-medium">LIVE</span>
                 </span>
               )}
-              <span className="px-2 py-1 bg-black/50 backdrop-blur-sm rounded-md text-xs text-white">
+              <span className="px-3 py-1.5 bg-black/50 backdrop-blur-sm rounded-full text-xs text-white">
                 {stats.resolution}
               </span>
               {stats.bitrate > 0 && (
-                <span className="px-2 py-1 bg-black/50 backdrop-blur-sm rounded-md text-xs text-white">
+                <span className="hidden sm:block px-3 py-1.5 bg-black/50 backdrop-blur-sm rounded-full text-xs text-white">
                   {Math.round(stats.bitrate / 1000)} Kbps
                 </span>
               )}
@@ -629,21 +560,21 @@ const ViewerPage: React.FC<ViewerPageProps> = ({ streamId }) => {
           </div>
 
           {/* Bottom Controls */}
-          <div className="absolute bottom-0 left-0 right-0 p-4 space-y-2">
+          <div className="absolute bottom-0 left-0 right-0 p-4">
             {/* Control Buttons */}
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-3">
               {/* Play/Pause */}
               <button
                 onClick={togglePlay}
                 className="text-white hover:text-white/80 transition-colors"
               >
                 {playing ? (
-                  <svg className="w-8 h-8" viewBox="0 0 24 24" fill="currentColor">
+                  <svg className="w-10 h-10" viewBox="0 0 24 24" fill="currentColor">
                     <rect x="6" y="4" width="4" height="16" rx="1" />
                     <rect x="14" y="4" width="4" height="16" rx="1" />
                   </svg>
                 ) : (
-                  <svg className="w-8 h-8" viewBox="0 0 24 24" fill="currentColor">
+                  <svg className="w-10 h-10" viewBox="0 0 24 24" fill="currentColor">
                     <path d="M8 5v14l11-7z" />
                   </svg>
                 )}
@@ -657,7 +588,7 @@ const ViewerPage: React.FC<ViewerPageProps> = ({ streamId }) => {
               >
                 <button
                   onClick={toggleMute}
-                  className="text-white hover:text-white/80 transition-colors p-1"
+                  className="text-white hover:text-white/80 transition-colors p-2"
                 >
                   {muted || volume === 0 ? (
                     <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor">
@@ -694,12 +625,12 @@ const ViewerPage: React.FC<ViewerPageProps> = ({ streamId }) => {
 
               {/* Audio Level Indicator */}
               {hasAudio && playing && (
-                <div className="flex items-center gap-0.5 ml-1">
-                  <div className={`w-1 h-3 ${audioLevel > 0.1 ? 'bg-green-500' : 'bg-white/30'} rounded-full transition-colors`} />
-                  <div className={`w-1 h-4 ${audioLevel > 0.3 ? 'bg-green-500' : 'bg-white/30'} rounded-full transition-colors`} />
-                  <div className={`w-1 h-5 ${audioLevel > 0.5 ? 'bg-green-500' : 'bg-white/30'} rounded-full transition-colors`} />
-                  <div className={`w-1 h-4 ${audioLevel > 0.7 ? 'bg-green-500' : 'bg-white/30'} rounded-full transition-colors`} />
-                  <div className={`w-1 h-3 ${audioLevel > 0.9 ? 'bg-green-500' : 'bg-white/30'} rounded-full transition-colors`} />
+                <div className="flex items-center gap-1 ml-2">
+                  <div className={`w-1.5 h-4 ${audioLevel > 0.1 ? 'bg-green-500' : 'bg-white/30'} rounded-full transition-all`} />
+                  <div className={`w-1.5 h-6 ${audioLevel > 0.3 ? 'bg-green-500' : 'bg-white/30'} rounded-full transition-all`} />
+                  <div className={`w-1.5 h-8 ${audioLevel > 0.5 ? 'bg-green-500' : 'bg-white/30'} rounded-full transition-all`} />
+                  <div className={`w-1.5 h-6 ${audioLevel > 0.7 ? 'bg-green-500' : 'bg-white/30'} rounded-full transition-all`} />
+                  <div className={`w-1.5 h-4 ${audioLevel > 0.9 ? 'bg-green-500' : 'bg-white/30'} rounded-full transition-all`} />
                 </div>
               )}
 
@@ -709,7 +640,7 @@ const ViewerPage: React.FC<ViewerPageProps> = ({ streamId }) => {
               <div className="relative">
                 <button
                   onClick={() => setShowSettings(!showSettings)}
-                  className="text-white/80 hover:text-white transition-colors p-1"
+                  className="text-white/80 hover:text-white transition-colors p-2"
                 >
                   <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor">
                     <path d="M19.14 12.94c.04-.3.06-.61.06-.94s-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" />
@@ -717,16 +648,16 @@ const ViewerPage: React.FC<ViewerPageProps> = ({ streamId }) => {
                 </button>
 
                 {showSettings && (
-                  <div className="absolute bottom-full right-0 mb-2 w-56 bg-white rounded-lg shadow-xl border border-gray-200 py-2">
-                    <div className="px-3 py-1.5 text-xs font-medium text-gray-500 border-b border-gray-100">
+                  <div className="absolute bottom-full right-0 mb-2 w-64 bg-white rounded-xl shadow-2xl border border-gray-200 py-2">
+                    <div className="px-4 py-2 text-xs font-medium text-gray-500 border-b border-gray-100">
                       Playback Speed
                     </div>
-                    <div className="grid grid-cols-3 gap-1 p-2">
+                    <div className="grid grid-cols-3 gap-1 p-3">
                       {[0.5, 0.75, 1, 1.25, 1.5, 2].map(rate => (
                         <button
                           key={rate}
                           onClick={() => changePlaybackRate(rate)}
-                          className={`px-2 py-1 text-xs rounded transition-colors ${
+                          className={`px-3 py-2 text-sm rounded-lg transition-colors ${
                             playbackRate === rate 
                               ? 'bg-red-500 text-white' 
                               : 'text-gray-700 hover:bg-gray-100'
@@ -737,26 +668,26 @@ const ViewerPage: React.FC<ViewerPageProps> = ({ streamId }) => {
                       ))}
                     </div>
 
-                    <div className="px-3 py-1.5 text-xs font-medium text-gray-500 border-t border-gray-100 mt-1">
+                    <div className="px-4 py-2 text-xs font-medium text-gray-500 border-t border-gray-100">
                       Video Quality
                     </div>
-                    <div className="p-2 space-y-1">
+                    <div className="p-3 space-y-1">
                       {QUALITY_LEVELS.map(quality => (
                         <button
                           key={quality.label}
                           onClick={() => applyQuality(quality)}
-                          className={`w-full text-left px-2 py-1.5 text-sm rounded transition-colors ${
+                          className={`w-full flex items-center justify-between px-3 py-2.5 text-sm rounded-lg transition-colors ${
                             selectedQuality.label === quality.label 
                               ? 'bg-red-500 text-white' 
                               : 'text-gray-700 hover:bg-gray-100'
                           }`}
                         >
-                          <span className="flex items-center justify-between">
-                            <span>{quality.label}</span>
-                            {quality.isHD && (
-                              <span className="text-xs bg-yellow-500 text-white px-1 rounded">HD</span>
-                            )}
-                          </span>
+                          <span>{quality.label}</span>
+                          {quality.isHD && (
+                            <span className="text-xs bg-yellow-500 text-white px-2 py-0.5 rounded-full">
+                              HD
+                            </span>
+                          )}
                         </button>
                       ))}
                     </div>
@@ -767,7 +698,7 @@ const ViewerPage: React.FC<ViewerPageProps> = ({ streamId }) => {
               {/* Fullscreen */}
               <button
                 onClick={toggleFullscreen}
-                className="text-white/80 hover:text-white transition-colors p-1"
+                className="text-white/80 hover:text-white transition-colors p-2"
               >
                 {fullscreen ? (
                   <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
