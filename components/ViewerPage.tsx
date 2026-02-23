@@ -35,6 +35,7 @@ const ViewerPage: React.FC<ViewerPageProps> = ({ streamId }) => {
   const [playbackRate, setPlaybackRate] = useState(1);
   const [isLiveStream, setIsLiveStream] = useState(true);
   const [hasVideo, setHasVideo] = useState(false);
+  const [hasAudio, setHasAudio] = useState(false);
   const [isBuffering, setIsBuffering] = useState(false);
   const [stats, setStats] = useState({ resolution: 'Loading...', bitrate: 0 });
 
@@ -77,6 +78,7 @@ const ViewerPage: React.FC<ViewerPageProps> = ({ streamId }) => {
       }
       return true;
     } catch (e) {
+      console.warn('[Viewer] Play failed:', e);
       return false;
     }
   }, []);
@@ -196,13 +198,38 @@ const ViewerPage: React.FC<ViewerPageProps> = ({ streamId }) => {
           if (!mountedRef.current) return;
           
           console.log('[Viewer] Received stream');
+          console.log('[Viewer] Stream tracks:', remoteStream.getTracks().map(t => `${t.kind}:${t.enabled}`));
+          
           const video = videoRef.current;
           if (video) {
+            // Ensure video is not muted by default
+            video.muted = false;
+            video.volume = 1;
+            
             video.srcObject = remoteStream;
+            
+            // Check for audio tracks
+            const audioTracks = remoteStream.getAudioTracks();
+            setHasAudio(audioTracks.length > 0);
+            
+            if (audioTracks.length > 0) {
+              console.log('[Viewer] Audio tracks found:', audioTracks.length);
+              // Ensure audio tracks are enabled
+              audioTracks.forEach(track => {
+                track.enabled = true;
+              });
+            } else {
+              console.warn('[Viewer] No audio tracks in stream');
+            }
+            
             setHasVideo(true);
             setStatus('live');
             setIsBuffering(false);
-            safePlay();
+            
+            // Small delay to ensure stream is properly attached
+            setTimeout(() => {
+              safePlay();
+            }, 100);
 
             // Update stream info
             const videoTrack = remoteStream.getVideoTracks()[0];
@@ -378,6 +405,7 @@ const ViewerPage: React.FC<ViewerPageProps> = ({ streamId }) => {
           ref={videoRef}
           className="w-full h-full object-contain bg-black"
           playsInline
+          autoPlay={false} // We'll control playback manually
           onClick={togglePlay}
           onDoubleClick={toggleFullscreen}
         />
@@ -399,6 +427,13 @@ const ViewerPage: React.FC<ViewerPageProps> = ({ streamId }) => {
                 </button>
               )}
             </div>
+          </div>
+        )}
+
+        {/* Audio Status Indicator (for debugging) */}
+        {hasVideo && !hasAudio && (
+          <div className="absolute top-3 left-3 px-2 py-1 bg-yellow-500/80 rounded-md text-xs text-white">
+            No Audio
           </div>
         )}
 
